@@ -21,6 +21,12 @@ mkdir -p "$REPORT_DIR"
 touch "$REPORT_FILE"
 
 #---------------------------------------------------
+# NEW: Export REPORT_FILE so child scripts
+# (diagnostics.sh, logger.sh) can use it
+#---------------------------------------------------
+export REPORT_FILE
+
+#---------------------------------------------------
 # Banner
 #---------------------------------------------------
 log_info "=================================================="
@@ -29,13 +35,13 @@ log_info "=================================================="
 log_info "Hostname : $(hostname)"
 log_info "Service  : $SERVICE_NAME"
 log_info "Time     : $(date)"
+log_info "Report   : $REPORT_FILE"
 log_info "=================================================="
 
 ####################################################
 # Helper Function
 ####################################################
 
-# Returns success if service process exists
 check_status() {
     pgrep -x "$SERVICE_NAME" > /dev/null 2>&1
 }
@@ -67,6 +73,7 @@ if ! check_status; then
     log_warn "$SERVICE_NAME is DOWN."
 
     log_info "Collecting root cause BEFORE attempting recovery..."
+
     "$SCRIPT_DIR/diagnostics.sh"
 
     log_info "Attempting to START $SERVICE_NAME..."
@@ -90,6 +97,7 @@ if ! check_status; then
         log_error "$SERVICE_NAME could not be started."
 
         log_info "Collecting diagnostics AFTER failed start..."
+
         "$SCRIPT_DIR/diagnostics.sh"
 
         log_error "SCRIPT TERMINATED"
@@ -142,6 +150,7 @@ log_step "STEP 4/4 - Restart Service"
 log_warn "Service is running but application is unhealthy."
 
 log_info "Collecting diagnostics BEFORE restart..."
+
 "$SCRIPT_DIR/diagnostics.sh"
 
 log_info "Restarting $SERVICE_NAME..."
@@ -149,6 +158,7 @@ log_info "Restarting $SERVICE_NAME..."
 sudo systemctl restart "$SERVICE_NAME"
 
 log_info "Waiting ${WAIT_TIME} seconds..."
+
 sleep "$WAIT_TIME"
 
 if check_status; then
@@ -192,6 +202,7 @@ fi
 log_error "Health Check FAILED after restart."
 
 log_info "Collecting FINAL diagnostics..."
+
 "$SCRIPT_DIR/diagnostics.sh"
 
 log_error "=================================================="
