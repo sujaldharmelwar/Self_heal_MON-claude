@@ -4,130 +4,200 @@
 # Self-Healing Monitoring - Main Script
 ####################################################
 
-# Load configuration
+#---------------------------------------------------
+# Load configuration files
+#---------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 source "$SCRIPT_DIR/../config/monitor.conf"
 source "$SCRIPT_DIR/logger.sh"
 
+#---------------------------------------------------
+# Create report file
+#---------------------------------------------------
 REPORT_FILE="$REPORT_DIR/report_$(date +%F_%H-%M-%S).log"
 
 mkdir -p "$REPORT_DIR"
 touch "$REPORT_FILE"
 
-log_info "========================================"
-log_info "Self-Healing Monitoring Started"
+#---------------------------------------------------
+# Banner
+#---------------------------------------------------
+log_info "=================================================="
+log_info "      SELF-HEALING MONITORING STARTED"
+log_info "=================================================="
 log_info "Hostname : $(hostname)"
+log_info "Service  : $SERVICE_NAME"
 log_info "Time     : $(date)"
-log_info "========================================"
+log_info "=================================================="
 
-# Small helper so we always print a plain-English RUNNING / NOT RUNNING
-# status, instead of only logging when something is wrong.
+####################################################
+# Helper Function
+####################################################
+
+# Returns success if service process exists
 check_status() {
     pgrep -x "$SERVICE_NAME" > /dev/null 2>&1
 }
 
 ####################################################
-# Step 1: Initial Status Check
+# STEP 1 - Check Current Service Status
 ####################################################
 
-log_step "1/4 - Checking current status of $SERVICE_NAME"
+log_step "STEP 1/4 - Checking current status of $SERVICE_NAME"
 
 if check_status; then
     PID=$(pgrep -x "$SERVICE_NAME")
-    log_info "Status: $SERVICE_NAME IS RUNNING (PID: $PID)"
+
+    log_info "Current Status : RUNNING"
+    log_info "PID            : $PID"
+
 else
-    log_warn "Status: $SERVICE_NAME IS NOT RUNNING"
+    log_warn "Current Status : NOT RUNNING"
 fi
 
 ####################################################
-# Step 2: Start Service If Needed
+# STEP 2 - Service Recovery (Only if Stopped)
 ####################################################
 
 if ! check_status; then
-    log_step "2/4 - Starting $SERVICE_NAME"
 
-    log_info "Running: sudo systemctl start $SERVICE_NAME"
+    log_step "STEP 2/4 - Service Recovery"
+
+    log_warn "$SERVICE_NAME is DOWN."
+
+    log_info "Collecting root cause BEFORE attempting recovery..."
+    "$SCRIPT_DIR/diagnostics.sh"
+
+    log_info "Attempting to START $SERVICE_NAME..."
+
     sudo systemctl start "$SERVICE_NAME"
 
-    log_info "Waiting ${WAIT_TIME}s for service to come up..."
+    log_info "Waiting ${WAIT_TIME} seconds..."
     sleep "$WAIT_TIME"
 
     if check_status; then
-        PID=$(pgrep -x "$SERVICE_NAME")
-        log_info "Status after start attempt: $SERVICE_NAME IS RUNNING (PID: $PID)"
-    else
-        log_error "Status after start attempt: $SERVICE_NAME IS STILL NOT RUNNING"
-        log_error "Could not start $SERVICE_NAME. Collecting diagnostics..."
 
+        PID=$(pgrep -x "$SERVICE_NAME")
+
+        log_info "Recovery Result : SUCCESS"
+        log_info "$SERVICE_NAME started successfully."
+        log_info "PID : $PID"
+
+    else
+
+        log_error "Recovery Result : FAILED"
+        log_error "$SERVICE_NAME could not be started."
+
+        log_info "Collecting diagnostics AFTER failed start..."
         "$SCRIPT_DIR/diagnostics.sh"
 
-        log_error "RESULT: FAILED - service would not start. See diagnostics above."
+        log_error "SCRIPT TERMINATED"
+
         exit 1
+
     fi
+
 else
-    log_step "2/4 - Starting $SERVICE_NAME"
-    log_info "Skipped - service was already running."
+
+    log_step "STEP 2/4 - Service Recovery"
+
+    log_info "Recovery skipped because service is already running."
+
 fi
 
 ####################################################
-# Step 3: HTTP Health Check
+# STEP 3 - HTTP Health Check
 ####################################################
 
-log_step "3/4 - Running HTTP health check ($HEALTH_URL)"
+log_step "STEP 3/4 - HTTP Health Check"
+
+log_info "Checking URL : $HEALTH_URL"
 
 HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" "$HEALTH_URL")
 
-log_info "HTTP response code: $HTTP_CODE"
+log_info "HTTP Response Code : $HTTP_CODE"
 
 if [ "$HTTP_CODE" = "200" ]; then
-    log_info "Status: HEALTH CHECK PASSED"
-    log_info "RESULT: SUCCESS - $SERVICE_NAME is running and healthy."
+
+    log_info "Health Check : PASSED"
+
+    log_info "=================================================="
+    log_info "FINAL RESULT : SUCCESS"
+    log_info "$SERVICE_NAME is running and healthy."
+    log_info "=================================================="
+
     exit 0
+
 fi
 
-log_warn "Status: HEALTH CHECK FAILED (got HTTP $HTTP_CODE, expected 200)"
+log_warn "Health Check : FAILED"
 
 ####################################################
-# Step 4: Recovery - Restart and Recheck
+# STEP 4 - Restart Service
 ####################################################
 
-log_step "4/4 - Health check failed - attempting recovery"
+log_step "STEP 4/4 - Restart Service"
 
-log_info "Collecting diagnostics before restart..."
+log_warn "Service is running but application is unhealthy."
+
+log_info "Collecting diagnostics BEFORE restart..."
 "$SCRIPT_DIR/diagnostics.sh"
 
-log_info "Running: sudo systemctl restart $SERVICE_NAME"
+log_info "Restarting $SERVICE_NAME..."
+
 sudo systemctl restart "$SERVICE_NAME"
 
-log_info "Waiting ${WAIT_TIME}s before re-checking..."
+log_info "Waiting ${WAIT_TIME} seconds..."
 sleep "$WAIT_TIME"
 
 if check_status; then
+
     PID=$(pgrep -x "$SERVICE_NAME")
-    log_info "Status after restart: $SERVICE_NAME IS RUNNING (PID: $PID)"
+
+    log_info "$SERVICE_NAME restarted successfully."
+    log_info "PID : $PID"
+
 else
-    log_error "Status after restart: $SERVICE_NAME IS NOT RUNNING"
+
+    log_error "$SERVICE_NAME is NOT running after restart."
+
 fi
 
-log_info "Re-running HTTP health check..."
+####################################################
+# Final Health Check
+####################################################
+
+log_info "Running final HTTP Health Check..."
+
 HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" "$HEALTH_URL")
-log_info "HTTP response code: $HTTP_CODE"
+
+log_info "HTTP Response Code : $HTTP_CODE"
 
 if [ "$HTTP_CODE" = "200" ]; then
-    log_info "Status: HEALTH CHECK PASSED"
-    log_info "RESULT: SUCCESS - recovered after restart."
+
+    log_info "=================================================="
+    log_info "FINAL RESULT : SUCCESS"
+    log_info "Service recovered after restart."
+    log_info "=================================================="
+
     exit 0
+
 fi
 
 ####################################################
 # Critical Failure
 ####################################################
 
-log_error "Status: HEALTH CHECK FAILED AGAIN (got HTTP $HTTP_CODE, expected 200)"
-log_error "Collecting final diagnostics..."
+log_error "Health Check FAILED after restart."
 
+log_info "Collecting FINAL diagnostics..."
 "$SCRIPT_DIR/diagnostics.sh"
 
-log_error "RESULT: CRITICAL FAILURE - $SERVICE_NAME did not recover. See diagnostics above and report at $REPORT_FILE"
+log_error "=================================================="
+log_error "FINAL RESULT : CRITICAL FAILURE"
+log_error "$SERVICE_NAME could not be recovered."
+log_error "Manual intervention required."
+log_error "=================================================="
 
 exit 1
